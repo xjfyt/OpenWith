@@ -77,9 +77,9 @@ COM DLL 会：
 
 1、文件
 
-- `visual-studio-code/install-win11-context-menu.ps1`
-- `visual-studio-code/uninstall-win11-context-menu.ps1`
-- `visual-studio-code/win11-context-menu/src/VSCodeExplorerCommand.cpp`
+- `vscode/install-win11-context-menu.ps1`
+- `vscode/uninstall-win11-context-menu.ps1`
+- `vscode/win11-context-menu/src/VSCodeExplorerCommand.cpp`
 
 2、默认探测路径
 
@@ -96,19 +96,19 @@ COM DLL 会：
 3、安装
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\visual-studio-code\install-win11-context-menu.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\vscode\install-win11-context-menu.ps1
 ```
 
 如果 VSCode 在非标准路径：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\visual-studio-code\install-win11-context-menu.ps1 -VSCodeExe "C:\Path\To\Code.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\vscode\install-win11-context-menu.ps1 -VSCodeExe "C:\Path\To\Code.exe"
 ```
 
 4、卸载
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\visual-studio-code\uninstall-win11-context-menu.ps1 -RemoveGeneratedFiles
+powershell -NoProfile -ExecutionPolicy Bypass -File .\vscode\uninstall-win11-context-menu.ps1 -RemoveGeneratedFiles
 ```
 
 五、Antigravity

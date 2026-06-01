@@ -1,5 +1,6 @@
-# Reference source checkout, not part of this project.
-/vscode/
+# Optional external reference source checkouts, not part of this project.
+/vscode-source/
+/reference-vscode/
 
 # CodeGraph and editor metadata.
 /.codegraph/
