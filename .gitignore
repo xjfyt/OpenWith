@@ -1,0 +1,30 @@
+# Reference source checkout, not part of this project.
+/vscode/
+
+# CodeGraph and editor metadata.
+/.codegraph/
+/.vscode/
+/.idea/
+
+# Native build outputs.
+*.obj
+*.exp
+*.lib
+*.dll
+*.pdb
+*.ilk
+*.exe
+
+# AppX/MSIX package outputs.
+*.appx
+*.msix
+*.cer
+*.pfx
+**/build-check/
+**/external/
+**/manifest/
+**/package/
+
+# OS noise.
+Thumbs.db
+desktop.ini
