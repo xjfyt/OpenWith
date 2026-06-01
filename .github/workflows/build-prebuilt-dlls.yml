@@ -1,0 +1,103 @@
+name: Build prebuilt DLLs
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/build-prebuilt-dlls.yml
+      - scripts/build-prebuilt-dll.ps1
+      - src/OpenWithExplorerCommand.cpp
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build x64 DLL
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-prebuilt-dll.ps1 -Architecture x64
+
+      - name: Ensure ARM64 MSVC tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installPath) {
+            throw 'Visual Studio installation with MSVC tools was not found.'
+          }
+
+          $crossVars = Join-Path $installPath 'VC\Auxiliary\Build\vcvarsamd64_arm64.bat'
+          if (Test-Path -LiteralPath $crossVars -PathType Leaf) {
+            Write-Host 'ARM64 MSVC cross tools are already installed.'
+            exit 0
+          }
+
+          $installer = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vs_installer.exe"
+          & $installer modify `
+            --installPath $installPath `
+            --add Microsoft.VisualStudio.Component.VC.Tools.ARM64 `
+            --quiet `
+            --norestart `
+            --nocache `
+            --wait
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "vs_installer.exe exited with code $LASTEXITCODE"
+          }
+
+          if (-not (Test-Path -LiteralPath $crossVars -PathType Leaf)) {
+            throw 'ARM64 MSVC cross tools were not installed.'
+          }
+
+      - name: Build arm64 DLL
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-prebuilt-dll.ps1 -Architecture arm64
+
+      - name: Verify DLL outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @(
+            '.\bin\x64\OpenWithExplorerCommand.dll',
+            '.\bin\arm64\OpenWithExplorerCommand.dll'
+          )) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing DLL: $path"
+            }
+
+            $item = Get-Item -LiteralPath $path
+            if ($item.Length -le 0) {
+              throw "Empty DLL: $path"
+            }
+
+            Write-Host "$path $($item.Length) bytes"
+          }
+
+      - name: Commit DLL updates
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add bin/x64/OpenWithExplorerCommand.dll bin/arm64/OpenWithExplorerCommand.dll
+
+          if (-not (git status --porcelain)) {
+            Write-Host 'Prebuilt DLLs are already up to date.'
+            exit 0
+          }
+
+          git commit -m 'Update prebuilt DLLs [skip ci]'
+          git push

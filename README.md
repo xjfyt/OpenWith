@@ -70,7 +70,7 @@ Windows 11 的 `fileExplorerContextMenus` schema 不支持 `Drive` 作为 `ItemT
 - Windows 11
 - PowerShell 5.1+
 - 已安装对应目标软件
-- 仓库里的 `bin/x64/OpenWithExplorerCommand.dll`
+- 仓库里的预编译 DLL：x64 使用 `bin/x64/OpenWithExplorerCommand.dll`，ARM64 使用 `bin/arm64/OpenWithExplorerCommand.dll`
 
 默认安装走 loose manifest 注册，不需要 Visual Studio、Windows SDK 或 C++ 编译工具链。只有当 loose manifest 被系统拒绝，脚本回退到 signed sparse package 时，才会用到 Windows SDK 里的 `makeappx.exe` 和 `signtool.exe`。
 
@@ -182,6 +182,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\jetbrains\uninstall-
 | `scripts/build-prebuilt-dll.ps1` | 编译共享 COM DLL |
 | `src/OpenWithExplorerCommand.cpp` | 共享 `IExplorerCommand` COM 实现 |
 | `bin/x64/OpenWithExplorerCommand.dll` | 可直接分发的预编译 x64 DLL |
+| `bin/arm64/OpenWithExplorerCommand.dll` | 可直接分发的预编译 ARM64 DLL |
+| `.github/workflows/build-prebuilt-dlls.yml` | GitHub Actions 自动构建 x64/ARM64 DLL |
 
 
 
@@ -422,9 +424,9 @@ Tools\<ToolId>\ExePath
 
 ### 1、是否可以提交 bin 目录
 
-可以。`bin/x64/OpenWithExplorerCommand.dll` 是项目运行所需的预编译 DLL，建议提交，让其他人拉取项目后可以直接使用，不必在每台电脑上安装 Visual Studio 和 Windows SDK。
+可以。`bin/x64/OpenWithExplorerCommand.dll` 和 `bin/arm64/OpenWithExplorerCommand.dll` 是项目运行所需的预编译 DLL，建议提交，让其他人拉取项目后可以直接使用，不必在每台电脑上安装 Visual Studio 和 Windows SDK。
 
-当前 DLL 体积很小，约 160 KB，直接提交到 Git 更符合“拉取即可使用”的目标。如果后续增加更多架构、更多二进制产物，或者 DLL 体积明显变大，可以再改用 Git LFS。
+当前 DLL 体积很小，直接提交到 Git 更符合“拉取即可使用”的目标。如果后续增加更多二进制产物，或者 DLL 体积明显变大，可以再改用 Git LFS。
 
 
 
@@ -440,30 +442,51 @@ Tools\<ToolId>\ExePath
 
 ```gitattributes
 bin/x64/*.dll filter=lfs diff=lfs merge=lfs -text
+bin/arm64/*.dll filter=lfs diff=lfs merge=lfs -text
 ```
 
 然后重新 add DLL。使用 LFS 后，其他人需要安装 Git LFS，并在 clone 后确保 `git lfs pull` 已拉取真实 DLL，否则拿到的可能只是指针文件。
 
 
 
-### 3、什么时候需要重新编译
+### 3、GitHub Actions 自动构建
+
+项目包含 `.github/workflows/build-prebuilt-dlls.yml`。当 `src/OpenWithExplorerCommand.cpp`、`scripts/build-prebuilt-dll.ps1` 或 workflow 本身变更并推送到 `main` 时，GitHub Actions 会在 Windows runner 上自动构建：
+
+- `bin/x64/OpenWithExplorerCommand.dll`
+- `bin/arm64/OpenWithExplorerCommand.dll`
+
+workflow 构建完成后会把 DLL 变化提交回仓库。仓库需要允许 GitHub Actions 使用 `contents: write` 写回代码；如果 workflow 报权限错误，在 GitHub 仓库的 Actions workflow permissions 中开启 read and write permissions。
+
+也可以手动触发：
+
+```powershell
+gh workflow run build-prebuilt-dlls.yml
+```
+
+### 4、什么时候需要重新编译
 
 只有修改 `src/OpenWithExplorerCommand.cpp` 后才需要重新编译：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-prebuilt-dll.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-prebuilt-dll.ps1 -Architecture x64
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-prebuilt-dll.ps1 -Architecture arm64
 ```
 
 如果只是新增工具、改菜单标题、改检测路径、改 CLSID 或调整工具配置，不需要重新编译 DLL。
 
+### 5、强制重新编译
 
-
-### 4、强制重新编译
-
-安装时默认优先使用 `bin/x64/OpenWithExplorerCommand.dll`。需要在本机重新编译并使用新 DLL 时：
+安装时默认按系统架构自动选择 `bin/x64` 或 `bin/arm64` 下的 DLL。需要在本机重新编译并使用新 DLL 时：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install-tool.ps1 -Tool vscode -ForceCompile
+```
+
+也可以手动指定架构：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-tool.ps1 -Tool vscode -Architecture arm64 -UsePrebuilt
 ```
 
 重新编译 DLL 后，需要重新运行对应安装脚本。脚本会把新的 DLL 复制到对应工具的运行时目录，并重新注册 manifest。

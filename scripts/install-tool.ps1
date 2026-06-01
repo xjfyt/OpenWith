@@ -4,6 +4,8 @@ param(
 	[string]$ExePath = '',
 	[string]$Title = '',
 	[string]$Distro = '',
+	[ValidateSet('auto', 'x64', 'arm64')]
+	[string]$Architecture = 'auto',
 	[switch]$ForceCompile,
 	[switch]$UsePrebuilt
 )
@@ -13,7 +15,6 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ToolsRoot = Join-Path $ProjectRoot 'tools'
 $SourcePath = Join-Path $ProjectRoot 'src\OpenWithExplorerCommand.cpp'
-$PrebuiltDllPath = Join-Path $ProjectRoot 'bin\x64\OpenWithExplorerCommand.dll'
 $PackageVersion = '1.0.0.0'
 $PublisherDisplayName = 'OpenWith'
 $SharedRegistryRoot = 'HKCU:\Software\Classes\OpenWithContextMenus'
@@ -40,6 +41,23 @@ function Test-LikeAny([string]$Value, [object[]]$Patterns) {
 	}
 
 	return $false
+}
+
+function Resolve-PrebuiltArchitecture([string]$RequestedArchitecture) {
+	if ($RequestedArchitecture -ne 'auto') {
+		return $RequestedArchitecture
+	}
+
+	$nativeArchitecture = $env:PROCESSOR_ARCHITEW6432
+	if ([string]::IsNullOrWhiteSpace($nativeArchitecture)) {
+		$nativeArchitecture = $env:PROCESSOR_ARCHITECTURE
+	}
+
+	if ($nativeArchitecture -and $nativeArchitecture.ToUpperInvariant() -eq 'ARM64') {
+		return 'arm64'
+	}
+
+	return 'x64'
 }
 
 function Resolve-WildcardCandidate([string]$Pattern) {
@@ -187,46 +205,22 @@ function New-Logo([string]$Path, [string]$Text, [int]$Size) {
 	$format.Dispose()
 }
 
-function Install-ExplorerCommandDll([string]$ExternalDir, [string]$DllPath, [string]$ObjPath) {
+function Install-ExplorerCommandDll([string]$ExternalDir, [string]$DllPath, [string]$ObjPath, [string]$ResolvedArchitecture) {
 	New-Item -ItemType Directory -Force -Path $ExternalDir | Out-Null
+	$prebuiltDllPath = Join-Path $ProjectRoot "bin\$ResolvedArchitecture\OpenWithExplorerCommand.dll"
 
-	if (-not $ForceCompile -and (Test-Path -LiteralPath $PrebuiltDllPath -PathType Leaf)) {
-		Copy-Item -LiteralPath $PrebuiltDllPath -Destination $DllPath -Force
+	if (-not $ForceCompile -and (Test-Path -LiteralPath $prebuiltDllPath -PathType Leaf)) {
+		Copy-Item -LiteralPath $prebuiltDllPath -Destination $DllPath -Force
 		return 'prebuilt'
 	}
 
 	if ($UsePrebuilt) {
-		throw "Prebuilt DLL not found: $PrebuiltDllPath"
+		throw "Prebuilt DLL not found: $prebuiltDllPath"
 	}
 
 	Assert-FileExists $SourcePath 'Explorer command source'
-	$vcvars = Find-VcVars64
-	$args = @(
-		'/nologo',
-		'/std:c++17',
-		'/EHsc',
-		'/O2',
-		'/LD',
-		'/DUNICODE',
-		'/D_UNICODE',
-		"/Fo:$ObjPath",
-		"/Fe:$DllPath",
-		$SourcePath,
-		'/link',
-		'/NOLOGO',
-		'/DLL',
-		'/SUBSYSTEM:WINDOWS',
-		'/EXPORT:DllGetClassObject',
-		'/EXPORT:DllCanUnloadNow',
-		'shell32.lib',
-		'ole32.lib',
-		'advapi32.lib'
-	)
-	$command = (Quote-CmdArg $vcvars) + ' >nul && cl.exe ' + (($args | ForEach-Object { Quote-CmdArg $_ }) -join ' ')
-	cmd.exe /c $command
-	if ($LASTEXITCODE -ne 0) {
-		throw "cl.exe exited with code $LASTEXITCODE"
-	}
+	$buildScript = Join-Path $PSScriptRoot 'build-prebuilt-dll.ps1'
+	& $buildScript -Architecture $ResolvedArchitecture -OutputPath $DllPath | Out-Host
 
 	return 'compiled'
 }
@@ -412,6 +406,7 @@ $configPath = Join-Path $toolDir 'tool.ps1'
 Assert-FileExists $configPath 'Tool config'
 
 $config = & $configPath
+$resolvedArchitecture = Resolve-PrebuiltArchitecture $Architecture
 $resolvedTitle = if ($Title) { $Title } else { $config.DefaultTitle }
 $resolvedDistro = if ($Distro) { $Distro } else { $config.DefaultDistro }
 $resolvedExePath = Resolve-ExecutableFromConfig $config $ExePath
@@ -430,7 +425,7 @@ $appxPath = Join-Path $packageDir "$($config.RuntimeName).appx"
 $certPath = Join-Path $packageDir "$($config.RuntimeName).cer"
 $classId = ([guid]$config.ClassId).ToString('D').ToUpperInvariant()
 
-$dllMode = Install-ExplorerCommandDll $externalDir $dllPath $objPath
+$dllMode = Install-ExplorerCommandDll $externalDir $dllPath $objPath $resolvedArchitecture
 Assert-FileExists $dllPath 'Explorer command DLL'
 Write-Manifest $config $manifestPath $assetsDir $classId $dllName $resolvedExePath
 Set-ContextMenuSettings $config $classId $resolvedExePath $resolvedTitle $resolvedDistro
@@ -449,6 +444,7 @@ try {
 $package = Get-AppxPackage -Name $config.PackageName -ErrorAction Stop
 [PSCustomObject]@{
 	Tool = $config.ToolId
+	Architecture = $resolvedArchitecture
 	Mode = $mode
 	DllMode = $dllMode
 	PackageName = $package.Name
