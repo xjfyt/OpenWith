@@ -15,6 +15,9 @@
 *.pdb
 *.ilk
 *.exe
+!/bin/
+!/bin/x64/
+!/bin/x64/OpenWithExplorerCommand.dll
 
 # AppX/MSIX package outputs.
 *.appx

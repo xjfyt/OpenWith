@@ -2,9 +2,9 @@
 
 1、目标
 
-本项目把编辑器、终端等开发工具加入 Windows 11 资源管理器一级右键菜单。目标效果类似 VSCode 安装器中可选的“通过 Code 打开”，但不依赖安装器是否勾选对应选项。
+本项目把编辑器、IDE、终端等开发工具加入 Windows 11 资源管理器一线右键菜单。目标效果类似 VSCode 安装器里的“通过 Code 打开”，但不依赖安装器是否勾选对应选项，也能覆盖便携安装或后补安装的场景。
 
-2、为什么不用普通注册表
+2、为什么不只写注册表
 
 传统注册表写法通常是：
 
@@ -14,247 +14,244 @@ HKEY_CLASSES_ROOT\Directory\shell\AppName\command
 HKEY_CLASSES_ROOT\Directory\Background\shell\AppName\command
 ```
 
-这种方式仍然有效，但在 Windows 11 的新版右键菜单中通常会进入“显示更多选项”。要直接显示在一级菜单，需要使用 Windows 11 的 Explorer command 扩展方式。
+这种方式仍然有效，但在 Windows 11 新版右键菜单中通常会进入“显示更多选项”。要直接显示在一线菜单，需要使用 Windows 11 的 Explorer command 扩展方式。
 
 二、VSCode 官方实现方式
 
 1、关键文件
 
-VSCode 主仓库中的关键位置：
+VSCode 主仓库中和 Windows 11 右键菜单相关的位置是：
 
-- `vscode/resources/win32/appx/AppxManifest.xml`
-- `vscode/build/win32/code.iss`
-- `vscode/build/win32/explorer-dll-fetcher.ts`
+- `resources/win32/appx/AppxManifest.xml`
+- `build/win32/code.iss`
+- `build/win32/explorer-dll-fetcher.ts`
 
 2、核心流程
 
-VSCode 的安装器会：
+VSCode 安装器会准备一个实现 `IExplorerCommand` 的 COM DLL，再准备 AppX/MSIX manifest，在 manifest 中声明：
 
-1. 准备一个实现 `IExplorerCommand` 的 COM DLL。
-2. 准备 AppX/MSIX manifest，声明 `windows.fileExplorerContextMenus`。
-3. 在 manifest 中把 `Directory`、`Directory\Background`、`*` 绑定到同一个 `Verb` 和 COM `Clsid`。
-4. 在 manifest 中声明 `windows.comServer`，让 Explorer 通过 COM surrogate 加载 DLL。
-5. 通过 `Add-AppxPackage -Register ... -ExternalLocation ...` 或 sparse package 方式注册。
-6. DLL 在 `Invoke()` 中读取右键目标路径并启动目标应用。
+- `windows.fileExplorerContextMenus`
+- `windows.comServer`
+- `Directory`
+- `Directory\Background`
+- `*`
 
-三、本项目实现方式
+Explorer 渲染右键菜单时通过 manifest 中的 CLSID 激活 COM DLL，DLL 负责返回标题、图标、显示状态，并在点击时启动目标程序。
 
-1、文件结构
+三、本项目的新结构
 
-每个软件单独维护一套文件：
+1、共享层
 
-- `install-win11-context-menu.ps1`
-- `uninstall-win11-context-menu.ps1`
-- `win11-context-menu/src/*ExplorerCommand.cpp`
+当前项目已经从“每个工具复制一份脚本和 C++”调整为共享结构：
 
-2、安装脚本做什么
+| 路径 | 作用 |
+| --- | --- |
+| `src/OpenWithExplorerCommand.cpp` | 所有工具共用的 COM DLL 源码 |
+| `scripts/install-tool.ps1` | 通用安装器 |
+| `scripts/uninstall-tool.ps1` | 通用卸载器 |
+| `scripts/build-prebuilt-dll.ps1` | 编译预置 DLL |
+| `bin/x64/OpenWithExplorerCommand.dll` | 预编译 DLL |
+| `tools/<tool-id>/tool.ps1` | 单个工具的声明式配置 |
 
-安装脚本会：
+2、工具配置
 
-1. 编译 `IExplorerCommand` COM DLL。
-2. 生成运行时目录：`%LOCALAPPDATA%\OpenWith\<AppName>ContextMenu`。
-3. 生成 AppX manifest 和占位 logo。
-4. 写入 `HKCU:\Software\Classes\<AppName>ContextMenu`，保存 `Title` 和 `ExePath`。
-5. 删除当前用户下旧式 `shell\<AppName>` 菜单，避免重复。
-6. 使用 loose manifest 注册 AppX：
+每个 `tool.ps1` 返回一个 hashtable，主要字段包括：
 
-```powershell
-Add-AppxPackage -Register AppxManifest.xml -ExternalLocation <external-dir>
-```
+- `ToolId`：工具 ID，例如 `cursor`
+- `PackageName`：AppX package name
+- `ClassId`：该菜单项的 COM CLSID
+- `VerbId`：Explorer context menu verb
+- `DefaultTitle`：菜单标题
+- `LaunchMode`：点击后的启动模式
+- `ExeCandidates`：默认扫描路径
+- `CommandNames`：可通过 PATH 查找的命令名
+- `UninstallPatterns`：从卸载注册表中辅助查找安装目录
 
-如果 loose manifest 注册失败，脚本会退回到签名 sparse AppX 的方式。
+四、安装流程
 
-3、COM DLL 做什么
+1、路径解析
 
-COM DLL 会：
+安装脚本按顺序解析目标 exe：
 
-- `GetTitle()`：从注册表读取菜单标题。
-- `GetIcon()`：使用目标 exe 作为图标。
-- `GetState()`：目标 exe 存在时显示，否则隐藏。
-- `Invoke()`：执行目标程序并传入右键目标路径。
+1. 用户显式传入的 `-ExePath`
+2. `tool.ps1` 中的 `ExeCandidates`
+3. `Get-Command` 查找的 `CommandNames`
+4. 卸载注册表中的 `DisplayName`、`InstallLocation`、`DisplayIcon`
 
-四、Visual Studio Code
+如果都找不到，脚本会提示用户使用 `-ExePath` 指定路径。
 
-1、文件
+2、运行时目录
 
-- `vscode/install-win11-context-menu.ps1`
-- `vscode/uninstall-win11-context-menu.ps1`
-- `vscode/win11-context-menu/src/VSCodeExplorerCommand.cpp`
-
-2、默认探测路径
-
-安装脚本会自动尝试：
-
-- `%LOCALAPPDATA%\Programs\Microsoft VS Code\Code.exe`
-- `%ProgramFiles%\Microsoft VS Code\Code.exe`
-- `%ProgramFiles(x86)%\Microsoft VS Code\Code.exe`
-- `%LOCALAPPDATA%\Programs\Microsoft VS Code Insiders\Code - Insiders.exe`
-- `%ProgramFiles%\Microsoft VS Code Insiders\Code - Insiders.exe`
-- `%ProgramFiles(x86)%\Microsoft VS Code Insiders\Code - Insiders.exe`
-- 注册表卸载项中的 `InstallLocation` / `DisplayIcon`
-
-3、安装
+每个工具的运行时目录为：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\vscode\install-win11-context-menu.ps1
+%LOCALAPPDATA%\OpenWith\<RuntimeName>
 ```
 
-如果 VSCode 在非标准路径：
+里面会生成：
+
+- `external/OpenWithExplorerCommand.dll`
+- `external/Assets/Logo44.png`
+- `external/Assets/Logo150.png`
+- `manifest/AppxManifest.xml`
+- `package/*.appx` 和证书文件，仅在 loose manifest 失败后才需要
+
+3、注册表配置
+
+共享 DLL 不再把某个工具写死在 C++ 中，而是通过注册表映射：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\vscode\install-win11-context-menu.ps1 -VSCodeExe "C:\Path\To\Code.exe"
+HKCU:\Software\Classes\OpenWithContextMenus\ClassMap\{CLSID}
+HKCU:\Software\Classes\OpenWithContextMenus\Tools\<ToolId>
 ```
 
-4、卸载
+`ClassMap` 负责把 Explorer 传入的 CLSID 映射到工具 ID。`Tools\<ToolId>` 保存菜单标题、目标 exe、图标路径和启动模式。
+
+4、AppX manifest
+
+安装脚本会动态生成 manifest，声明：
+
+- package identity
+- file explorer context menus
+- COM surrogate server
+- 目标 `ItemType`
+
+当前支持的 `ItemType` 是：
+
+- `Directory`
+- `Directory\Background`
+- `*`
+
+`Drive` 不是 `fileExplorerContextMenus` schema 支持的 `ItemType`，所以盘符根目录场景通过进入盘符后在空白处右键触发 `Directory\Background`。
+
+五、共享 DLL 逻辑
+
+1、激活流程
+
+Explorer 激活 COM 类时会调用：
+
+```cpp
+DllGetClassObject(REFCLSID clsid, REFIID riid, void** object)
+```
+
+DLL 会把 `clsid` 转成 `{GUID}` 字符串，然后读取：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\vscode\uninstall-win11-context-menu.ps1 -RemoveGeneratedFiles
+HKCU:\Software\Classes\OpenWithContextMenus\ClassMap\{GUID}
 ```
 
-五、Antigravity
+拿到 `ToolId` 后，后续 `GetTitle()`、`GetIcon()`、`GetState()`、`Invoke()` 都读取对应工具配置。
 
-1、文件
+2、菜单状态
 
-- `antigravity/install-win11-context-menu.ps1`
-- `antigravity/uninstall-win11-context-menu.ps1`
-- `antigravity/win11-context-menu/src/AntigravityExplorerCommand.cpp`
+`GetState()` 会读取 `ExePath`。如果目标 exe 存在，菜单显示并可点击；如果 exe 不存在，菜单隐藏。
 
-2、默认目标
+3、启动模式
+
+| LaunchMode | 行为 |
+| --- | --- |
+| `OpenPath` | 把当前选中文件或目录作为参数传给目标程序 |
+| `OpenDirectory` | 把当前目录作为参数传给目标程序 |
+| `GitBashHere` | 执行 `git-bash.exe --cd=<directory>` |
+| `WindowsTerminalHere` | 执行 `wt.exe -d <directory>` |
+| `WslHere` | 执行 `wsl.exe --cd <directory>`，可选 `-Distro` |
+
+六、预编译 DLL
+
+1、是否可以直接分发
+
+可以。`OpenWithExplorerCommand.dll` 是一个通用 x64 原生 COM DLL，不包含某台电脑特有的信息。工具差异都在 manifest 和注册表配置里，所以可以先在一台装好 VS Build Tools 和 Windows SDK 的开发电脑上编译好，再把整个项目复制到目标电脑运行安装脚本。
+
+2、目标电脑需要什么
+
+目标电脑需要：
+
+- Windows 11
+- PowerShell 5.1+
+- `bin/x64/OpenWithExplorerCommand.dll`
+- 要注册的目标软件本身
+
+目标电脑不需要：
+
+- Visual Studio
+- Windows SDK
+- C++ 编译工具链
+
+默认安装走 loose manifest 注册，不需要 Windows SDK。只有当 loose manifest 被系统拒绝，脚本回退到 signed sparse package 时，才会用到 SDK 中的 `makeappx.exe` 和 `signtool.exe`。
+
+3、什么时候需要重新编译
+
+只有修改了 `src/OpenWithExplorerCommand.cpp` 时才需要重新编译：
 
 ```powershell
-%LOCALAPPDATA%\Programs\Antigravity\Antigravity.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-prebuilt-dll.ps1
 ```
 
-3、安装
+如果只是新增工具、改标题、改路径检测、改 CLSID 或改启动模式，只需要修改 `tools/<tool-id>/tool.ps1`，不需要重新编译 DLL。
+
+七、新增工具
+
+1、复制配置目录
+
+新增工具时复制一个现有目录，例如：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\antigravity\install-win11-context-menu.ps1
+Copy-Item .\tools\cursor .\tools\new-tool -Recurse
 ```
 
-4、卸载
+2、修改配置
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\antigravity\uninstall-win11-context-menu.ps1 -RemoveGeneratedFiles
-```
+编辑 `tools/new-tool/tool.ps1`：
 
-六、Trae
+- 生成新的 `ClassId`
+- 修改 `ToolId`
+- 修改 `PackageName`
+- 修改 `VerbId`
+- 修改 `DefaultTitle`
+- 修改 `LaunchMode`
+- 修改 `ExeCandidates`
 
-1、文件
+3、保留入口脚本
 
-- `trae/install-win11-context-menu.ps1`
-- `trae/uninstall-win11-context-menu.ps1`
-- `trae/win11-context-menu/src/TraeExplorerCommand.cpp`
+单工具入口脚本只负责把参数转发给 `scripts/install-tool.ps1` 和 `scripts/uninstall-tool.ps1`。新增工具时建议保留这种薄入口，避免再复制通用安装逻辑。
 
-2、默认探测路径
+八、当前工具说明
 
-安装脚本会自动尝试：
+1、编辑器和 IDE
 
-- `%LOCALAPPDATA%\Programs\Trae\Trae.exe`
-- `%LOCALAPPDATA%\Programs\Trae CN\Trae.exe`
-- `%LOCALAPPDATA%\Programs\trae\Trae.exe`
-- `%LOCALAPPDATA%\Trae\Trae.exe`
-- `%ProgramFiles%\Trae\Trae.exe`
-- `%ProgramFiles(x86)%\Trae\Trae.exe`
-- 注册表卸载项中的 `InstallLocation` / `DisplayIcon`
+| Tool | 默认行为 |
+| --- | --- |
+| `vscode` | 通过 Code 打开文件或目录 |
+| `antigravity` | 通过 Antigravity 打开文件或目录 |
+| `trae` | 通过 Trae 打开文件或目录 |
+| `cursor` | 通过 Cursor 打开文件或目录 |
+| `windsurf` | 通过 Windsurf 打开文件或目录 |
+| `jetbrains` | 自动检测 JetBrains 系列 IDE，或通过 `-JetBrainsExe` 指定 |
 
-3、安装
+2、终端
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\trae\install-win11-context-menu.ps1 -TraeExe "C:\Path\To\Trae.exe"
-```
-
-4、卸载
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\trae\uninstall-win11-context-menu.ps1 -RemoveGeneratedFiles
-```
-
-七、Git Bash Here
-
-1、文件
-
-- `git-bash/install-win11-context-menu.ps1`
-- `git-bash/uninstall-win11-context-menu.ps1`
-- `git-bash/win11-context-menu/src/GitBashHereExplorerCommand.cpp`
-
-2、默认目标
-
-```powershell
-C:\Program Files\Git\git-bash.exe
-```
-
-3、安装
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\git-bash\install-win11-context-menu.ps1
-```
-
-如果 Git Bash 在非标准路径：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\git-bash\install-win11-context-menu.ps1 -GitBashExe "C:\Path\To\git-bash.exe"
-```
-
-4、卸载
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\git-bash\uninstall-win11-context-menu.ps1 -RemoveGeneratedFiles
-```
-
-5、路径处理
-
-Git Bash 的 COM DLL 会把右键目标转换为目录：
-
-- 目录、文件夹空白处：使用该目录。
-- 文件：使用文件所在目录。
-
-然后执行：
-
-```powershell
-git-bash.exe --cd=<directory>
-```
-
-Windows 11 的 `fileExplorerContextMenus` schema 不接受 `Drive` 作为 `ItemType`。如果要在盘符根目录打开 Git Bash，进入盘符后在空白处右键即可走 `Directory\Background`。
-
-八、新增其他软件
-
-1、复制目录
-
-复制一个现有目录，例如 `trae`。
-
-2、替换标识
-
-替换软件名、默认 exe 路径、注册表 key、package name、DLL 文件名。
-
-3、生成 CLSID
-
-生成新的 CLSID，并替换脚本和 C++ 源码中的 class id。
-
-4、修改 manifest
-
-修改 manifest 中的 `Verb Id` 和 DLL 文件名。
-
-5、验证
-
-```powershell
-Get-AppxPackage -Name OpenWith.<AppName>ContextMenu
-reg query "HKCU\Software\Classes\<AppName>ContextMenu" /s
-```
+| Tool | 默认行为 |
+| --- | --- |
+| `git-bash` | 在当前目录打开 Git Bash |
+| `windows-terminal` | 在当前目录打开 Windows Terminal |
+| `wsl` | 在当前目录打开 WSL，可用 `-Distro` 指定发行版 |
 
 九、注意事项
 
-1、运行时目录
-
-运行时目录不能删除，否则菜单的 COM DLL 会失效。
-
-2、菜单缓存
+1、Explorer 缓存
 
 Explorer 可能缓存菜单。安装后如果没有立刻出现，可以重启资源管理器或注销重登。
 
-3、旧式菜单
+2、旧式菜单残留
 
-如果旧式 `.reg` 写到了 `HKLM`，普通用户无法删除，它可能仍然留在“显示更多选项”里；一级菜单由新的 AppX/COM 扩展提供。
+如果旧式 `.reg` 写到了 `HKLM`，普通用户可能无法删除，它可能仍然留在“显示更多选项”里；一线菜单由本项目的 AppX/COM 扩展提供。
 
-4、重新编译
+3、DLL 文件不要删除
 
-修改 C++ 源码后重新运行安装脚本即可重新编译并注册。
+安装完成后，运行时目录里的 DLL 仍然会被 Explorer 使用。不要删除：
+
+```powershell
+%LOCALAPPDATA%\OpenWith\<RuntimeName>\external
+```
+
+如果要删除，请先运行对应卸载脚本。
