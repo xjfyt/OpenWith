@@ -10,10 +10,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$args = @('-Tool', 'trae')
-if ($TraeExe) { $args += @('-ExePath', $TraeExe) }
-if ($Title) { $args += @('-Title', $Title) }
-if ($Architecture) { $args += @('-Architecture', $Architecture) }
-if ($ForceCompile) { $args += '-ForceCompile' }
-if ($UsePrebuilt -or $SkipCompile) { $args += '-UsePrebuilt' }
-& (Join-Path $ProjectRoot 'scripts\install-tool.ps1') @args
+$forwardArgs = @('-Tool', 'trae')
+if ($TraeExe) { $forwardArgs += @('-ExePath', $TraeExe) }
+if ($Title) { $forwardArgs += @('-Title', $Title) }
+if ($Architecture) { $forwardArgs += @('-Architecture', $Architecture) }
+if ($ForceCompile) { $forwardArgs += '-ForceCompile' }
+if ($UsePrebuilt -or $SkipCompile) { $forwardArgs += '-UsePrebuilt' }
+& (Join-Path $ProjectRoot 'scripts\install-tool.ps1') @forwardArgs

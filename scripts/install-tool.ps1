@@ -225,7 +225,7 @@ function Install-ExplorerCommandDll([string]$ExternalDir, [string]$DllPath, [str
 	return 'compiled'
 }
 
-function Write-Manifest([hashtable]$Config, [string]$ManifestPath, [string]$AssetsDir, [string]$ClassId, [string]$DllName, [string]$TargetExePath) {
+function Write-Manifest([hashtable]$Config, [string]$ManifestPath, [string]$AssetsDir, [string]$ClassId, [string]$DllName, [string]$TargetExePath, [string]$ResolvedTitle) {
 	New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ManifestPath), $AssetsDir | Out-Null
 	New-Logo (Join-Path $AssetsDir 'Logo44.png') $Config.LogoText 44
 	New-Logo (Join-Path $AssetsDir 'Logo150.png') $Config.LogoText 150
@@ -236,6 +236,7 @@ function Write-Manifest([hashtable]$Config, [string]$ManifestPath, [string]$Asse
 	}
 
 	$applicationExecutable = if ($Config.ApplicationExecutable) { $Config.ApplicationExecutable } else { 'OpenWithContextMenu.exe' }
+	$visualElementsDisplayName = if ($ResolvedTitle) { $ResolvedTitle } else { $Config.AppDisplayName }
 	$manifest = @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package
@@ -279,7 +280,7 @@ function Write-Manifest([hashtable]$Config, [string]$ManifestPath, [string]$Asse
       uap10:RuntimeBehavior="win32App">
       <uap:VisualElements
         AppListEntry="none"
-        DisplayName="$([System.Security.SecurityElement]::Escape($Config.AppDisplayName))"
+        DisplayName="$([System.Security.SecurityElement]::Escape($visualElementsDisplayName))"
         Description="$([System.Security.SecurityElement]::Escape($Config.Description))"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Logo150.png"
@@ -363,6 +364,66 @@ function Remove-LegacyRegistryVerbs([hashtable]$Config) {
 	}
 }
 
+function Get-LegacyVerbCommand([hashtable]$Config, [string]$ExePath, [string]$Distro, [string]$PathToken) {
+	$exe = '"' + $ExePath + '"'
+	switch ($Config.LaunchMode) {
+		'GitBashHere' { return "$exe `"--cd=$PathToken`"" }
+		'WindowsTerminalHere' { return "$exe -d `"$PathToken`"" }
+		'WslHere' {
+			if ($Distro) {
+				return "$exe -d `"$Distro`" --cd `"$PathToken`""
+			}
+			return "$exe --cd `"$PathToken`""
+		}
+		default {
+			# OpenPath / OpenDirectory：把目标路径直接传给程序
+			return "$exe `"$PathToken`""
+		}
+	}
+}
+
+function Set-LegacyContextMenuVerbs([hashtable]$Config, [string]$ExePath, [string]$Title, [string]$Distro) {
+	$verb = $Config.VerbId
+	$isHereMode = @('GitBashHere', 'WindowsTerminalHere', 'WslHere') -contains $Config.LaunchMode
+
+	# Explorer item type 映射到经典菜单注册表路径和命令行占位符。
+	# %1 = 选中的文件或目录，%V = 目录空白处的当前目录。
+	$itemTypeMap = @{
+		'*' = @{ SubKey = "Software\Classes\*\shell\$verb"; Token = '%1' }
+		'Directory' = @{ SubKey = "Software\Classes\Directory\shell\$verb"; Token = '%1' }
+		'Directory\Background' = @{ SubKey = "Software\Classes\Directory\Background\shell\$verb"; Token = '%V' }
+	}
+
+	foreach ($itemType in @($Config.ItemTypes)) {
+		$entry = $itemTypeMap[$itemType]
+		if (-not $entry) {
+			continue
+		}
+
+		# "Here" 模式需要目录。经典菜单无法从单个文件推断父目录，所以文件项只由新版菜单的 DLL 处理。
+		if ($isHereMode -and $itemType -eq '*') {
+			continue
+		}
+
+		$command = Get-LegacyVerbCommand $Config $ExePath $Distro $entry.Token
+
+		# 使用 .NET Registry API 创建，避免 PowerShell provider 把 "*" 当成通配符。
+		$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($entry.SubKey)
+		try {
+			$key.SetValue('', $Title, [Microsoft.Win32.RegistryValueKind]::String)
+			$key.SetValue('Icon', $ExePath, [Microsoft.Win32.RegistryValueKind]::String)
+			$commandKey = $key.CreateSubKey('command')
+			try {
+				$commandKey.SetValue('', $command, [Microsoft.Win32.RegistryValueKind]::String)
+			} finally {
+				$commandKey.Dispose()
+			}
+		} finally {
+			$key.Dispose()
+		}
+	}
+}
+
 function Ensure-SigningCertificate([hashtable]$Config, [string]$PackageDir, [string]$CertPath) {
 	New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
 	$cert = Get-ChildItem Cert:\CurrentUser\My |
@@ -427,9 +488,10 @@ $classId = ([guid]$config.ClassId).ToString('D').ToUpperInvariant()
 
 $dllMode = Install-ExplorerCommandDll $externalDir $dllPath $objPath $resolvedArchitecture
 Assert-FileExists $dllPath 'Explorer command DLL'
-Write-Manifest $config $manifestPath $assetsDir $classId $dllName $resolvedExePath
+Write-Manifest $config $manifestPath $assetsDir $classId $dllName $resolvedExePath $resolvedTitle
 Set-ContextMenuSettings $config $classId $resolvedExePath $resolvedTitle $resolvedDistro
 Remove-LegacyRegistryVerbs $config
+Set-LegacyContextMenuVerbs $config $resolvedExePath $resolvedTitle $resolvedDistro
 Remove-ExistingPackage $config.PackageName
 
 $mode = 'loose manifest'

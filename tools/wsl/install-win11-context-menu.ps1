@@ -11,11 +11,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$args = @('-Tool', 'wsl')
-if ($WslExe) { $args += @('-ExePath', $WslExe) }
-if ($Title) { $args += @('-Title', $Title) }
-if ($Distro) { $args += @('-Distro', $Distro) }
-if ($Architecture) { $args += @('-Architecture', $Architecture) }
-if ($ForceCompile) { $args += '-ForceCompile' }
-if ($UsePrebuilt -or $SkipCompile) { $args += '-UsePrebuilt' }
-& (Join-Path $ProjectRoot 'scripts\install-tool.ps1') @args
+$forwardArgs = @('-Tool', 'wsl')
+if ($WslExe) { $forwardArgs += @('-ExePath', $WslExe) }
+if ($Title) { $forwardArgs += @('-Title', $Title) }
+if ($Distro) { $forwardArgs += @('-Distro', $Distro) }
+if ($Architecture) { $forwardArgs += @('-Architecture', $Architecture) }
+if ($ForceCompile) { $forwardArgs += '-ForceCompile' }
+if ($UsePrebuilt -or $SkipCompile) { $forwardArgs += '-UsePrebuilt' }
+& (Join-Path $ProjectRoot 'scripts\install-tool.ps1') @forwardArgs

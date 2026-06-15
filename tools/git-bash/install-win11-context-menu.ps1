@@ -10,10 +10,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$args = @('-Tool', 'git-bash')
-if ($GitBashExe) { $args += @('-ExePath', $GitBashExe) }
-if ($Title) { $args += @('-Title', $Title) }
-if ($Architecture) { $args += @('-Architecture', $Architecture) }
-if ($ForceCompile) { $args += '-ForceCompile' }
-if ($UsePrebuilt -or $SkipCompile) { $args += '-UsePrebuilt' }
-& (Join-Path $ProjectRoot 'scripts\install-tool.ps1') @args
+$forwardArgs = @('-Tool', 'git-bash')
+if ($GitBashExe) { $forwardArgs += @('-ExePath', $GitBashExe) }
+if ($Title) { $forwardArgs += @('-Title', $Title) }
+if ($Architecture) { $forwardArgs += @('-Architecture', $Architecture) }
+if ($ForceCompile) { $forwardArgs += '-ForceCompile' }
+if ($UsePrebuilt -or $SkipCompile) { $forwardArgs += '-UsePrebuilt' }
+& (Join-Path $ProjectRoot 'scripts\install-tool.ps1') @forwardArgs

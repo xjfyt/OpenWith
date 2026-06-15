@@ -2,9 +2,14 @@
 
 ### 1、项目目标
 
-OpenWith 用来给 Windows 11 资源管理器添加一线右键菜单，让常用开发工具获得类似 VSCode “通过 Code 打开”的入口。
+OpenWith 用来给 Windows 11 资源管理器添加右键菜单，让常用开发工具获得类似 VSCode “通过 Code 打开”的入口。
 
-传统 `.reg` 写入 `*\shell`、`Directory\shell`、`Directory\Background\shell` 的方式在 Windows 11 上通常只会进入“显示更多选项”。本项目使用 AppX `fileExplorerContextMenus` 加 COM `IExplorerCommand`，把菜单注册到 Windows 11 新版一线右键菜单。
+每个工具会同时注册到两套菜单：
+
+- **Windows 11 新版一线右键菜单**：使用 AppX `fileExplorerContextMenus` 加 COM `IExplorerCommand`。这是传统 `.reg` 做不到的部分。
+- **经典右键菜单（“显示更多选项”/ Windows 10 风格）**：使用传统 `*\shell`、`Directory\shell`、`Directory\Background\shell` 注册表 verb。
+
+两套机制互补：新版菜单只接受 AppX 扩展，经典菜单只接受注册表 verb，因此两者各注册一次，不会互相重复。
 
 
 
@@ -217,11 +222,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\jetbrains\uninstall-
 
 
 
-## 六、Windows 11 一线菜单原理
+## 六、两套菜单的原理
 
-### 1、传统注册表方式的限制
+### 1、传统注册表方式的能力与限制
 
-传统右键菜单通常写入这些注册表位置：
+传统右键菜单写入这些注册表位置：
 
 ```reg
 HKEY_CLASSES_ROOT\*\shell\AppName\command
@@ -229,7 +234,15 @@ HKEY_CLASSES_ROOT\Directory\shell\AppName\command
 HKEY_CLASSES_ROOT\Directory\Background\shell\AppName\command
 ```
 
-这种方式在 Windows 10 和 Windows 11 的“显示更多选项”中仍然有效，但通常不会出现在 Windows 11 新版一线右键菜单里。
+这种方式在 Windows 10 和 Windows 11 的经典右键菜单（“显示更多选项”）中有效，但通常不会出现在 Windows 11 新版一线右键菜单里。本项目用它来覆盖经典菜单，写入的是 `HKCU`（当前用户），不需要管理员权限。
+
+安装时占位符约定：
+
+- `*\shell` 文件项使用 `%1`（选中的文件）。
+- `Directory\shell` 目录项使用 `%1`（选中的目录）。
+- `Directory\Background\shell` 目录空白处使用 `%V`（当前目录）。
+
+“Here” 类终端工具（`git-bash`、`windows-terminal`、`wsl`）在经典菜单里只注册目录和目录空白处，不注册文件项——经典菜单无法从单个文件推断父目录，文件场景由新版菜单的 DLL 处理。
 
 
 
@@ -308,6 +321,16 @@ HKCU:\Software\Classes\OpenWithContextMenus\Tools\<ToolId>
 ```
 
 `ClassMap\{CLSID}` 只保存 `ToolId`，用于把 Explorer 激活的 COM CLSID 映射到工具。`Tools\<ToolId>` 保存标题、目标 exe、图标路径、启动模式和可选参数。
+
+此外还会写入经典菜单使用的传统 verb（供“显示更多选项”加载）：
+
+```powershell
+HKCU:\Software\Classes\*\shell\<VerbId>
+HKCU:\Software\Classes\Directory\shell\<VerbId>
+HKCU:\Software\Classes\Directory\Background\shell\<VerbId>
+```
+
+每个 verb 下的 `(默认)` 是菜单标题，`Icon` 是目标 exe，`command` 子键是按启动模式拼好的命令行。
 
 
 
@@ -545,8 +568,10 @@ param(
 然后转发：
 
 ```powershell
-if ($NewToolExe) { $args += @('-ExePath', $NewToolExe) }
+if ($NewToolExe) { $forwardArgs += @('-ExePath', $NewToolExe) }
 ```
+
+> 注意：入口脚本里转发参数的数组变量命名为 `$forwardArgs`，不要使用 `$args`。`$args` 是 PowerShell 自动变量，在 PowerShell 7 下用 `@args` splat 会出现参数错位。
 
 
 
@@ -566,7 +591,19 @@ Get-AppxPackage -Name OpenWith.VSCodeContextMenu
 reg query "HKCU\Software\Classes\OpenWithContextMenus" /s
 ```
 
-如果都存在但菜单没显示，可以重启资源管理器或注销重登。
+如果都存在但菜单没显示，可以重启资源管理器或注销重登：
+
+```powershell
+Stop-Process -Name explorer -Force
+```
+
+Windows 会缓存已注册的 packaged 右键菜单。如果改过 manifest 或重装后菜单仍是旧样子（例如本应一线显示却还嵌在子菜单里），先彻底卸载再重装，然后重启资源管理器；个别情况下需要注销重登才能彻底刷新缓存：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\uninstall-tool.ps1 -Tool vscode -RemoveGeneratedFiles
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-tool.ps1 -Tool vscode
+Stop-Process -Name explorer -Force
+```
 
 
 

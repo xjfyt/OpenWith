@@ -47,6 +47,21 @@ foreach ($key in @($config.LegacySettingsKeys)) {
 	Remove-RegistryKeyIfPresent $key
 }
 
+$verbIds = @(@($config.VerbId) + @($config.LegacyVerbIds)) | Where-Object { $_ } | Select-Object -Unique
+foreach ($verb in $verbIds) {
+	$verbKeys = @(
+		"HKCU:\Software\Classes\*\shell\$verb",
+		"HKCU:\Software\Classes\Directory\shell\$verb",
+		"HKCU:\Software\Classes\Directory\Background\shell\$verb",
+		"HKLM:\Software\Classes\*\shell\$verb",
+		"HKLM:\Software\Classes\Directory\shell\$verb",
+		"HKLM:\Software\Classes\Directory\Background\shell\$verb"
+	)
+	foreach ($verbKey in $verbKeys) {
+		Remove-RegistryKeyIfPresent $verbKey
+	}
+}
+
 if ($RemoveGeneratedFiles -and (Test-Path -LiteralPath $runtimeRoot)) {
 	Remove-Item -LiteralPath $runtimeRoot -Recurse -Force
 }
